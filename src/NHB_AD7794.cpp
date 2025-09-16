@@ -370,17 +370,20 @@ int AD7794::waitForConvReady (uint32_t timeout){
   uint32_t t = millis();
 
   while((millis() - t) <= timeout){
-    
-    SPI.transfer(AD7794_READ_STATUS_REG);
-
-    //Read status register
-    inByte = SPI.transfer(0xFF); //dummy byte
-    if((inByte & 0x80) == 0){
-      //bit cleared, conversion is ready
+    if(isConvReady()) {
       return 0;
     }
   }
   return -1;
+}
+
+bool AD7794::isConvReady() {
+  uint8_t inByte;
+  SPI.transfer(AD7794_READ_STATUS_REG);
+
+  //Read status register
+  inByte = SPI.transfer(0xFF); //dummy byte
+  return (inByte & 0x80) == 0;
 }
 
 // This function is BLOCKING. I'm not sure if it is even possible to make a

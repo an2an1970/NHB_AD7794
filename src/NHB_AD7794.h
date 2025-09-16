@@ -110,6 +110,7 @@ class AD7794
     void zero(uint8_t ch);  //Single channel
     void zero();            //All enabled, external channels (not internal temperature or VCC monitor)
     float offset(uint8_t ch);
+    bool isConvReady();
 
   private:
     //Private helper functions
