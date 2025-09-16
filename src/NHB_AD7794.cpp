@@ -466,22 +466,8 @@ uint32_t AD7794::getReadingRaw(uint8_t ch)
 {
   bool shouldStart = false;
 
-  // Decide whether we need to kick off a conversion
-  if (!convPending) {
-    if (isSnglConvMode) {
-      // Single conversion mode: each read requires an explicit start
-      shouldStart = true;
-    } else {
-      // Continuous conversion mode:
-      // start only if not yet active OR channel changed
-      if (!contConvActive || contConvCh != ch) {
-        shouldStart = true;
-      }
-    }
-  }
-
-  // Start conversion if needed (no-op when already pending)
-  if (shouldStart) {
+// Start if: nothing pending AND (single-shot OR NOT(continuous-active on the same channel))
+  if (!convPending && (isSnglConvMode || !(contConvActive && contConvCh == ch))) {
     startConversion(ch);
   }
 
