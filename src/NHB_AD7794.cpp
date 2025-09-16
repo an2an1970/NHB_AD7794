@@ -56,6 +56,10 @@ AD7794::AD7794(uint8_t csPin, uint32_t spiFrequency, double refVoltage)
       Channel[i].refMode = AD7794_REF_INT;           
     }
   }    
+  convPending   = false;
+  convPendingCh = 0xFF;
+  contConvActive = false;
+  contConvCh     = 0xFF;
 }
 
 void AD7794::begin()
@@ -364,6 +368,72 @@ float AD7794::offset(uint8_t ch)
   return Channel[ch].offset;
 }
 
+void AD7794::startConversion(uint8_t ch)
+{
+  // If something is already pending, do nothing (idempotent start).
+  if (convPending) {
+    return;
+  }
+
+  // Select/remember the channel and apply configuration.
+  setActiveCh(ch);
+
+  // Start an SPI transaction and kick off the conversion.
+  SPI.beginTransaction(spiSettings);
+  startConv();  // private low-level helper; asserts CS LOW and writes mode reg
+
+  // Mark this conversion as pending.
+  convPending = true;
+  convPendingCh = ch;
+
+  // In continuous mode we keep CS asserted and do not end the SPI transaction here.
+  if (!isSnglConvMode) {
+    digitalWrite(CS, LOW);    // ensure CS stays asserted in continuous read mode
+    contConvActive = true;
+    contConvCh     = ch;
+  }
+}
+
+uint32_t AD7794::awaitConversionAndReadRaw(uint32_t timeoutMs)
+{
+  // Use default timeout if not provided.
+  if (timeoutMs == 0) {
+    timeoutMs = convTimeout;
+  }
+
+  // If no conversion was explicitly started, decide what to do based on the mode:
+  if (!convPending) {
+    // In single conversion mode, start one now on the currently active channel.
+    // In continuous mode, if not active yet, start; if already active, just wait for the next sample.
+    if (isSnglConvMode || !_contConvActive) {
+      startConversion(currentCh);
+    } else {
+      // Continuous mode is already active; make this call consume the next sample.
+      digitalWrite(CS, LOW);       // keep/read in continuous read sequence
+      convPending   = true;       // treat "next sample" as pending
+      convPendingCh = _contConvCh;
+    }
+  }
+
+  // Wait for the conversion to complete (status poll).
+  // Note: current code ignores the -1 timeout error like getReadingRaw() did.
+  waitForConvReady(timeoutMs);
+
+  // Read the 24-bit result.
+  uint32_t adcRaw = getConvResult();
+
+  // Close the transaction for single-conversion mode.
+  if (isSnglConvMode) {
+    SPI.endTransaction();
+  }
+
+  // Clear the "pending" flag; in continuous mode conversions keep running in background.
+  convPending = false;
+  convPendingCh = 0xFF;
+
+  return adcRaw;
+}
+
 //Added 11-14-2021
 int AD7794::waitForConvReady (uint32_t timeout) {
   uint8_t inByte;
@@ -388,51 +458,35 @@ bool AD7794::isConvReady() {
 
 // This function is BLOCKING. I'm not sure if it is even possible to make a
 // non blocking version with this chip on a shared SPI bus.
+// Drop-in replacement. Keeps backward compatibility.
+// If a conversion is already pending (possibly on another channel), we do NOT start a new one;
+// we simply wait for the pending conversion and return its result.
+// In continuous mode, we only (re)start if not active yet OR the active channel differs.
 uint32_t AD7794::getReadingRaw(uint8_t ch)
 {
-  static bool contConvStarted = false;
-  // setActiveCh() also calls SPI.beginTransaction(), This causes a lockup on esp32
-  // so the call has been moved down.
-  //SPI.beginTransaction(spiSettings);
-  
-  if(isSnglConvMode || !contConvStarted){ //Added 11-14-2021
-    
-    setActiveCh(ch);
-  
-    SPI.beginTransaction(spiSettings); 
-  
-    startConv();
-    contConvStarted = true;
+  bool shouldStart = false;
+
+  // Decide whether we need to kick off a conversion
+  if (!convPending) {
+    if (isSnglConvMode) {
+      // Single conversion mode: each read requires an explicit start
+      shouldStart = true;
+    } else {
+      // Continuous conversion mode:
+      // start only if not yet active OR channel changed
+      if (!contConvActive || contConvCh != ch) {
+        shouldStart = true;
+      }
+    }
   }
-  
-  if(!isSnglConvMode){ //Added 11-14-2021
-    digitalWrite(CS,LOW); //It seems I need to re-assert this. Not sure why, I don't think it gets set HIGH anywhere when in continuous read mode ????
+
+  // Start conversion if needed (no-op when already pending)
+  if (shouldStart) {
+    startConversion(ch);
   }
-  //uint32_t t = millis();
-  
-  // #if defined (ESP8266) //Workaround until I figure out how to read the MISO pin status on the ESP8266
-  //   delay(10);           //This delay is only appropriate for the fastest rate (470 Hz)   
-  // #else   
-    
-    //Commented out to test status reg read method
-    // while(digitalRead(MISO) == HIGH){    
-    //   if((millis() - t) >= convTimeout){        
-    //     //Serial.print("getReadingRaw Timeout");
-    //     break;
-    //   }  
-    // }
 
-    //Test status read method NOTE: Should do something with return value (-1 if timeout)
-    waitForConvReady(convTimeout);
-
-  // #endif
-
-  uint32_t adcRaw = getConvResult();
-
-  if(isSnglConvMode){ //Added 11-14-2021
-    SPI.endTransaction();
-  }
-  return adcRaw;
+  // Exactly one blocking wait+read per call
+  return awaitConversionAndReadRaw();
 }
 
 void AD7794::setActiveCh(uint8_t ch)

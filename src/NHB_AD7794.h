@@ -101,7 +101,19 @@ class AD7794
     void setChopEnabled(bool enabled = true); //Added 11-14-2021
     void setActiveCh(uint8_t ch);
 
+    // Starts a conversion on the given channel and returns immediately.
+    // If a conversion is already pending, this call is a no-op.
+    void startConversion(uint8_t ch);
+
+    // Blocks until the current/next conversion is ready and returns the raw 24-bit ADC code.
+    // If timeoutMs == 0, a built-in default (convTimeout) is used.
+    // Note: In continuous mode this reads the next available sample.
+    uint32_t awaitConversionAndReadRaw(uint32_t timeoutMs = 0);
+
+    // Backward-compatible convenience: starts (if needed), waits and reads.
+    // If a conversion is already pending, it won't be started again.
     uint32_t getReadingRaw(uint8_t ch);
+
     //float getReadingVolts(uint8_t ch);
     float TempSensorRawToDegC(uint32_t rawData);
 
@@ -111,6 +123,7 @@ class AD7794
     void zero();            //All enabled, external channels (not internal temperature or VCC monitor)
     float offset(uint8_t ch);
     bool isConvReady();
+    int waitForConvReady(uint32_t timeout); //Added 11-14-2021
 
   private:
     //Private helper functions
@@ -122,7 +135,6 @@ class AD7794
     //void setActiveCh(uint8_t ch);
     uint8_t getGainBits(uint8_t gain);
 
-    int waitForConvReady(uint32_t timeout); //Added 11-14-2021
 
     uint8_t CS;
     uint8_t currentCh;    
@@ -138,6 +150,17 @@ class AD7794
 
     const uint16_t convTimeout = 480; // This should be set based on update rate eventually
 
+    // Tracks whether we have an outstanding conversion that was started but not yet read
+    bool convPending = false;
+
+    // Channel for which the pending conversion was started (valid only when convPending == true)
+    uint8_t convPendingCh = 0xFF;
+
+    // Tracks whether continuous conversion mode has been configured and started
+    bool contConvActive = false;
+
+    // The channel currently running in continuous mode (valid only when contConvActive == true)
+    uint8_t contConvCh = 0xFF;
 };
 
 #endif
