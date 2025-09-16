@@ -365,15 +365,15 @@ float AD7794::offset(uint8_t ch)
 }
 
 //Added 11-14-2021
-int AD7794::waitForConvReady (uint32_t timeout){
+int AD7794::waitForConvReady (uint32_t timeout) {
   uint8_t inByte;
   uint32_t t = millis();
-
-  while((millis() - t) <= timeout){
+  do {
     if(isConvReady()) {
       return 0;
     }
-  }
+  while((millis() - t) < timeout);
+  
   return -1;
 }
 
